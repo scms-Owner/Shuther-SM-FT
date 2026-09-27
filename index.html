@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<title>SCMS Shutter Measurement Scanner</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<style>
+:root{--bg:#f3f4f6;--card:#fff;--text:#111827;--muted:#6b7280;--primary:#f59e0b;--dark:#111827;--line:#e5e7eb;--danger:#dc2626}
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans Bengali,sans-serif;background:var(--bg);color:var(--text)}
+header{background:linear-gradient(135deg,#111827,#374151);color:#fff;padding:18px 16px;position:sticky;top:0;z-index:5;box-shadow:0 2px 10px #0002}
+h1{font-size:21px;margin:0 0 4px}header p{margin:0;color:#d1d5db;font-size:13px}.wrap{max-width:1000px;margin:auto;padding:14px}
+.card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px #0000000d;border:1px solid var(--line)}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;padding:13px 12px;font-weight:700;font-size:15px;cursor:pointer}.primary{background:var(--primary);color:#111827}.dark{background:var(--dark);color:#fff}.light{background:#eef2f7;color:#111827}.danger{background:#fee2e2;color:#991b1b}
+input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:contain;border-radius:12px;background:#111827;margin-top:12px;display:none}
+.status{font-size:13px;color:var(--muted);margin-top:10px;white-space:pre-wrap}.progress{height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:8px}.bar{height:100%;width:0;background:var(--primary);transition:.2s}
+.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f9fafb;position:sticky;top:0}td input{width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}.num{text-align:right}.summary{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:14px;border-radius:12px;background:#f9fafb;border:1px solid var(--line)}.metric small{display:block;color:var(--muted);font-size:12px}.metric strong{display:block;font-size:22px;margin-top:3px}.hint{font-size:13px;color:var(--muted);line-height:1.5}.footer{text-align:center;color:var(--muted);font-size:12px;padding:8px 0 25px}
+@media(max-width:600px){.actions{grid-template-columns:1fr}.wrap{padding:10px}.card{padding:12px;border-radius:13px}h1{font-size:19px}.summary{grid-template-columns:1fr 1fr}.metric strong{font-size:18px}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>SCMS Shutter Measurement Scanner</h1><p>ছবি স্ক্যান → মাপ ও পিচ শনাক্ত → m² → ft²</p></div></header>
+<main class="wrap">
+<section class="card">
+<div class="actions">
+<label class="btn primary" for="camera">📷 Camera Scan</label>
+<label class="btn light" for="upload">🖼️ ছবি Upload</label>
+</div>
+<input id="camera" type="file" accept="image/*" capture="environment">
+<input id="upload" type="file" accept="image/*">
+<img id="preview" class="preview" alt="স্ক্যান করা ছবি">
+<div id="status" class="status">ছবি দিন। OCR হাতে লেখা মাপ পড়ার চেষ্টা করবে। ফলাফল নিচের টেবিলে যাচাই/সংশোধন করতে পারবেন।</div>
+<div class="progress"><div id="bar" class="bar"></div></div>
+</section>
+
+<section class="card">
+<h3 style="margin-top:0">Measurement List</h3>
+<p class="hint">Dimension অবশ্যই mm-এ লিখুন, যেমন 475×885। Pitch/Quantity আলাদা কলামে দিন।</p>
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>Width (mm)</th><th>Height (mm)</th><th>Pitch</th><th>Area (m²)</th><th></th></tr></thead>
+<tbody id="rows"></tbody>
+</table>
+</div>
+<div class="actions" style="margin-top:12px">
+<button class="btn dark" id="add">＋ Add Row</button>
+<button class="btn light" id="clear">Clear All</button>
+</div>
+</section>
+
+<section class="card">
+<h3 style="margin-top:0">Total</h3>
+<div class="summary">
+<div class="metric"><small>Total Area</small><strong id="m2">0.0000 m²</strong></div>
+<div class="metric"><small>Square Feet</small><strong id="ft2">0.00 ft²</strong></div>
+</div>
+<p class="hint">Formula: (Width ÷ 1000) × (Height ÷ 1000) × Pitch. তারপর Total m² × 10.76 = ft².</p>
+</section>
+<div class="footer">SCMS • Shutter Measurement & Area Calculator</div>
+</main>
+
+<script>
+const rows=document.getElementById('rows'),statusEl=document.getElementById('status'),bar=document.getElementById('bar'),preview=document.getElementById('preview');
+let items=[];
+function render(){
+ rows.innerHTML='';
+ items.forEach((x,i)=>{
+  const tr=document.createElement('tr');
+  tr.innerHTML='<td>'+(i+1)+'</td>'+
+   '<td><input inputmode="decimal" data-i="'+i+'" data-k="w" value="'+(x.w??'')+'"></td>'+
+   '<td><input inputmode="decimal" data-i="'+i+'" data-k="h" value="'+(x.h??'')+'"></td>'+
+   '<td><input inputmode="decimal" data-i="'+i+'" data-k="p" value="'+(x.p??1)+'"></td>'+
+   '<td class="num">'+area(x).toFixed(4)+'</td>'+
+   '<td><button class="btn danger" data-del="'+i+'" style="padding:7px 9px">×</button></td>';
+  rows.appendChild(tr);
+ });
+ updateTotal();
+}
+function area(x){const w=Number(x.w),h=Number(x.h),p=Number(x.p);return w>0&&h>0&&p>0?(w/1000)*(h/1000)*p:0}
+function updateTotal(){
+ const total=items.reduce((s,x)=>s+area(x),0);
+ document.getElementById('m2').textContent=total.toFixed(4)+' m²';
+ document.getElementById('ft2').textContent=(total*10.76).toFixed(2)+' ft²';
+}
+document.getElementById('add').onclick=()=>{items.push({w:'',h:'',p:1});render()};
+document.getElementById('clear').onclick=()=>{items=[];render();statusEl.textContent='সব row মুছে ফেলা হয়েছে।'};
+rows.addEventListener('input',e=>{
+ const i=e.target.dataset.i,k=e.target.dataset.k;if(i===undefined)return;
+ items[+i][k]=e.target.value;render();
+});
+rows.addEventListener('click',e=>{
+ const i=e.target.dataset.del;if(i!==undefined){items.splice(+i,1);render()}
+});
+function parseText(text){
+ const out=[];
+ const lines=text.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+ for(const line of lines){
+  // Detect patterns such as 475x885, 475 X 885, 475×885 and a nearby integer pitch.
+  const m=line.match(/(\d{2,4})\s*[xX×*]\s*(\d{2,4})/);
+  if(!m)continue;
+  const nums=line.replace(m[0],' ').match(/\d+(?:\.\d+)?/g)||[];
+  let p=nums.length?Number(nums[nums.length-1]):1;
+  if(p<=0||p>100)p=1;
+  out.push({w:Number(m[1]),h:Number(m[2]),p});
+ }
+ return out;
+}
+async function scan(file){
+ if(!file)return;
+ preview.src=URL.createObjectURL(file);preview.style.display='block';
+ statusEl.textContent='OCR চলছে... হাতে লেখা হলে ফলাফল অবশ্যই টেবিলে যাচাই করুন।';
+ bar.style.width='5%';
+ try{
+  const result=await Tesseract.recognize(file,'eng',{
+   logger:m=>{if(m.status==='recognizing text'){bar.style.width=Math.round((m.progress||0)*100)+'%';}}
+  });
+  const text=result.data.text||'';
+  const found=parseText(text);
+  if(found.length){
+   items=found;render();
+   statusEl.textContent='OCR '+found.length+'টি measurement শনাক্ত করেছে। Dimension/Pitch যাচাই করে নিন।\n\nOCR text:\n'+text;
+  }else{
+   statusEl.textContent='OCR থেকে Dimension×Dimension পাওয়া যায়নি। নিচের Add Row দিয়ে ম্যানুয়ালি দিন।\n\nOCR text:\n'+text;
+  }
+  bar.style.width='100%';
+ }catch(err){
+  console.error(err);statusEl.textContent='OCR error: '+err.message+'\nম্যানুয়ালি measurement যোগ করুন।';bar.style.width='0%';
+ }
+}
+document.getElementById('camera').onchange=e=>scan(e.target.files[0]);
+document.getElementById('upload').onchange=e=>scan(e.target.files[0]);
+items=[{w:'',h:'',p:1}];render();
+</script>
+</body>
+</html>
