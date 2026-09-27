@@ -103,12 +103,13 @@ async function getTesseractWorker(progress){
   }
   return tessWorkerPromise;
 }
-async function runPass(worker,source,label,progress,pct){
+async function runPass(worker,source,label,progress,pct,psm='6'){
   progress('OCR '+label+' চলছে...',pct);
+  await worker.setParameters({page_seg_mode:psm});
   const r=await worker.recognize(source);
   const lines=r.data?.lines||[];
   const found=lines.length?parseLines(lines):parseText(r.data?.text||'');
-  return {found,text:r.data?.text||'',label};
+  return {found,text:r.data?.text||'',label,psm};
 }
 async function runSmartOCR(file,progress,allowFallback=true,multi=true){
   try{
@@ -121,11 +122,13 @@ async function runSmartOCR(file,progress,allowFallback=true,multi=true){
     }
     const results=[];
     for(let i=0;i<sources.length;i++){
-      results.push(await runPass(worker,sources[i].blob,sources[i].label,progress,25+i*22));
+      results.push(await runPass(worker,sources[i].blob,sources[i].label,progress,25+i*18,'6'));
+      // A second segmentation mode often separates handwritten table rows better.
+      results.push(await runPass(worker,sources[i].blob,sources[i].label+' • table mode',progress,35+i*18,'11'));
     }
 
-    // Choose the pass that found the most measurement rows. This preserves
-    // repeated dimensions that may legitimately occur on different rows.
+    // Keep every detected row. Repeated dimensions are valid on a measurement
+    // sheet, so never globally deduplicate rows.
     results.sort((a,b)=>b.found.length-a.found.length);
     const best=results[0]||{found:[]};
     progress('Measurement rows সাজানো হচ্ছে...',94);
