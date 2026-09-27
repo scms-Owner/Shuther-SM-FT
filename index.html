@@ -14,7 +14,19 @@ header{background:linear-gradient(135deg,#111827,#374151);color:#fff;padding:18p
 h1{font-size:21px;margin:0 0 4px}header p{margin:0;color:#d1d5db;font-size:13px}.wrap{max-width:1000px;margin:auto;padding:14px}
 .card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px #0000000d;border:1px solid var(--line)}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;padding:13px 12px;font-weight:700;font-size:15px;cursor:pointer}.primary{background:var(--primary);color:#111827}.dark{background:var(--dark);color:#fff}.light{background:#eef2f7;color:#111827}.danger{background:#fee2e2;color:#991b1b}
-input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:contain;border-radius:12px;background:#111827;margin-top:12px;display:none}
+input[type=file]{display:none}.scan-stage{position:relative;width:100%;margin-top:12px;border-radius:14px;overflow:hidden;background:#111827;display:none;min-height:180px}
+.preview{width:100%;max-height:560px;object-fit:contain;border-radius:14px;background:#111827;display:block}
+.scan-overlay{position:absolute;inset:0;display:none;pointer-events:none}
+.scan-overlay.active{display:block;background:linear-gradient(90deg,rgba(245,158,11,.03),rgba(245,158,11,.08),rgba(245,158,11,.03))}
+.scan-frame{position:absolute;inset:4%;border:2px solid rgba(255,255,255,.55);border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.12)}
+.scan-line{position:absolute;left:5%;right:5%;top:7%;height:3px;background:#f59e0b;box-shadow:0 0 8px 2px rgba(245,158,11,.9);animation:scanLine 2.2s ease-in-out infinite}
+.scan-label{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:rgba(17,24,39,.82);color:#fff;padding:6px 10px;border-radius:999px;font-size:11px;font-weight:800;letter-spacing:.08em}
+.scan-corners{position:absolute;inset:4%;border-radius:10px}
+.scan-corners:before,.scan-corners:after{content:"";position:absolute;width:28px;height:28px;border-color:#f59e0b;border-style:solid}
+.scan-corners:before{left:0;top:0;border-width:4px 0 0 4px}.scan-corners:after{right:0;bottom:0;border-width:0 4px 4px 0}
+@keyframes scanLine{0%{top:7%}50%{top:90%}100%{top:7%}}
+.scan-stage.scanning{display:block}
+.scan-stage.done .scan-overlay{display:none}
 .status{font-size:13px;color:var(--muted);margin-top:10px;white-space:pre-wrap}.scan-options{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;font-size:13px;color:#374151}.scan-options label{background:#f9fafb;border:1px solid var(--line);padding:8px 10px;border-radius:10px}.scan-options input{accent-color:#f59e0b}.progress{height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:8px}.bar{height:100%;width:0;background:var(--primary);transition:.2s}
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f9fafb;position:sticky;top:0}td input{width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}.num{text-align:right}.summary{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:14px;border-radius:12px;background:#f9fafb;border:1px solid var(--line)}.metric small{display:block;color:var(--muted);font-size:12px}.metric strong{display:block;font-size:22px;margin-top:3px}.hint{font-size:13px;color:var(--muted);line-height:1.5}.footer{text-align:center;color:var(--muted);font-size:12px;padding:8px 0 25px}
 @media(max-width:600px){.actions{grid-template-columns:1fr}.wrap{padding:10px}.card{padding:12px;border-radius:13px}h1{font-size:19px}.summary{grid-template-columns:1fr 1fr}.metric strong{font-size:18px}}
@@ -30,7 +42,15 @@ input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:co
 </div>
 <input id="camera" type="file" accept="image/*" capture="environment">
 <input id="upload" type="file" accept="image/*">
-<img id="preview" class="preview" alt="স্ক্যান করা ছবি">
+<div id="scanStage" class="scan-stage">
+  <img id="preview" class="preview" alt="স্ক্যান করা ছবি">
+  <div id="scanOverlay" class="scan-overlay" aria-hidden="true">
+    <div class="scan-frame"></div>
+    <div class="scan-line"></div>
+    <div class="scan-corners"></div>
+    <div class="scan-label">SCMS • PAGE SCAN</div>
+  </div>
+</div>
 <div class="scan-options">
 <label><input id="enhanced" type="checkbox" checked> ✨ Handwriting Enhanced OCR</label>
 <label><input id="multi" type="checkbox" checked> 🔎 Multiple OCR passes</label>
@@ -220,10 +240,15 @@ async function scan(file){
  bar.style.width='3%';
  statusEl.textContent='Smart OCR প্রস্তুত হচ্ছে... প্রথমবার কিছুটা সময় লাগতে পারে।';
  try{
+  // Give the user a real document-scanning phase before OCR starts.
+  await new Promise(resolve=>setTimeout(resolve,2300));
+  statusEl.textContent='🔎 লেখা শনাক্ত করা হচ্ছে এবং টেবিল তৈরি করা হচ্ছে...';
   const result=await window.runSmartOCR(file,(msg,pct)=>{
    bar.style.width=Math.max(3,Math.min(98,pct||3))+'%';
    statusEl.textContent=msg;
   },true);
+  scanOverlay.classList.remove('active');
+  scanStage.classList.add('done');
   if(result.found&&result.found.length){
    items=result.found.map(x=>({w:x.w,h:x.h,p:x.p}));
    render();
