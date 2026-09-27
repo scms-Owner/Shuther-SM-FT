@@ -90,7 +90,6 @@ async function getTesseractWorker(progress){
     if(!window.Tesseract)throw new Error('Tesseract.js did not load');
     progress('OCR engine প্রস্তুত হচ্ছে...',8);
     tessWorkerPromise=Tesseract.createWorker('eng',1,{
-      workerPath:new URL('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/worker.min.js').href,
       langPath:'https://tessdata.projectnaptha.com/4.0.0',
       corePath:'https://cdn.jsdelivr.net/npm/tesseract.js-core@5'
     }).then(async w=>{
