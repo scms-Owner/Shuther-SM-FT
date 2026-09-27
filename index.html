@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#111827">
 <title>SCMS Shutter Measurement Scanner</title>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="ocr-engine.js"></script>
 <style>
 :root{--bg:#f3f4f6;--card:#fff;--text:#111827;--muted:#6b7280;--primary:#f59e0b;--dark:#111827;--line:#e5e7eb;--danger:#dc2626}
 *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans Bengali,sans-serif;background:var(--bg);color:var(--text)}
@@ -216,61 +217,26 @@ async function ocrOnce(source,label,worker){
 async function scan(file){
  if(!file)return;
  preview.src=URL.createObjectURL(file);preview.style.display='block';
- bar.style.width='2%';
- const enhanced=document.getElementById('enhanced').checked;
- const multi=document.getElementById('multi').checked;
- statusEl.textContent='ছবির লেখা প্রস্তুত করা হচ্ছে...';
-
+ bar.style.width='3%';
+ statusEl.textContent='Smart OCR প্রস্তুত হচ্ছে... প্রথমবার কিছুটা সময় লাগতে পারে।';
  try{
-  const worker=await Tesseract.createWorker('eng',1,{
-   logger:m=>{
-    if(m.status==='recognizing text'){
-     bar.style.width=Math.max(8,Math.round((m.progress||0)*70))+'%';
-     statusEl.textContent='OCR চলছে: '+Math.round((m.progress||0)*100)+'%';
-    }
-   }
-  });
-  await worker.setParameters({
-   tessedit_char_whitelist:'0123456789xX×*.,:() ',
-   preserve_interword_spaces:'1'
-  });
-
-  const sources=[{src:file,label:'Original'}];
-  if(enhanced){
-   sources.push({src:await canvasPreprocess(file,'contrast'),label:'Contrast'});
-   sources.push({src:await canvasPreprocess(file,'threshold'),label:'Threshold'});
-  }
-  const results=[];
-  const limit=multi?sources.length:1;
-  for(let i=0;i<limit;i++)results.push(await ocrOnce(sources[i].src,sources[i].label,worker));
-  await worker.terminate();
-
-  let candidates=[];
-  for(const r of results)candidates.push(...parseWholeText(r.text).map(x=>({...x,source:r.label})));
-
-  // Score repeated OCR agreement. Measurements seen by more than one pass get priority.
-  const groups=new Map();
-  for(const x of candidates){
-   const k=x.w+'x'+x.h;
-   if(!groups.has(k))groups.set(k,{w:x.w,h:x.h,p:x.p,count:0,sources:new Set()});
-   const g=groups.get(k);g.count++;g.sources.add(x.source);
-   // Quantity from OCR can vary; retain the first plausible one unless another pass agrees.
-   if(g.p===1&&x.p!==1)g.p=x.p;
-  }
-  const ordered=[...groups.values()].sort((a,b)=>(b.count-a.count)||(a.w-b.w));
-  const found=ordered.map(x=>({w:x.w,h:x.h,p:x.p,confidence:x.count>1?'Repeated OCR':'OCR'}));
-
-  if(found.length){
-   items=found.map(({w,h,p})=>({w,h,p}));
+  const result=await window.runSmartOCR(file,(msg,pct)=>{
+   bar.style.width=Math.max(3,Math.min(98,pct||3))+'%';
+   statusEl.textContent=msg;
+  },true);
+  if(result.found&&result.found.length){
+   items=result.found.map(x=>({w:x.w,h:x.h,p:x.p}));
    render();
-   statusEl.textContent='✅ '+found.length+'টি measurement শনাক্ত হয়েছে।\nRepeated OCR match থাকলে সেটি বেশি নির্ভরযোগ্য। সব Dimension/Pitch একবার যাচাই করুন।';
+   statusEl.textContent='✅ '+result.found.length+'টি measurement পাওয়া গেছে।\nEngine: '+result.engine+'\nসব Width, Height ও Pitch একবার মিলিয়ে নিন।';
   }else{
-   statusEl.textContent='⚠️ Dimension শনাক্ত করা যায়নি। ছবিটি সোজা করে, আলো ভালো রেখে আবার Scan করুন। অথবা Add Row দিয়ে দিন।';
+   items=[{w:'',h:'',p:1}];
+   render();
+   statusEl.textContent='⚠️ Dimension পাওয়া যায়নি। ছবিটি সোজা/পরিষ্কার করে আবার Scan করুন। প্রয়োজনে Add Row দিয়ে হাতে লিখুন।';
   }
   bar.style.width='100%';
  }catch(err){
   console.error(err);
-  statusEl.textContent='OCR error: '+err.message+'\nছবিটি আবার চেষ্টা করুন অথবা ম্যানুয়ালি measurement যোগ করুন।';
+  statusEl.textContent='❌ Scanner error: '+err.message+'\nছবিটি আবার চেষ্টা করুন।';
   bar.style.width='0%';
  }
 }
