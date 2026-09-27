@@ -1,159 +1,18 @@
-/* SCMS Smart OCR Engine
-   Primary: official PaddleOCR.js / PP-OCRv5
-   Fallback: Tesseract.js already loaded by index.html
+/* SCMS Smart OCR Engine v2
+   PaddleOCR.js PP-OCRv5 English handwriting + Tesseract fallback.
+   Row-aware parsing: repeated dimensions on separate rows are preserved.
 */
-let paddlePromise=null;
-let paddleInstance=null;
-
-function norm(s){
-  const bn='০১২৩৪৫৬৭৮৯',en='0123456789';
-  return String(s||'').replace(/[০-৯]/g,c=>en[bn.indexOf(c)])
-    .replace(/[×✕✖·•]/g,'x').replace(/[Oo]/g,'0')
-    .replace(/[IiLl|]/g,'1').replace(/[Ss]/g,'5')
-    .replace(/[X*]/g,'x').replace(/\s+/g,' ').trim();
-}
+let paddlePromise=null,paddleInstance=null;
+function norm(s){const bn='০১২৩৪৫৬৭৮৯',en='0123456789';return String(s||'').replace(/[০-৯]/g,c=>en[bn.indexOf(c)]).replace(/[×✕✖·•]/g,'x').replace(/[Oo]/g,'0').replace(/[IiLl|]/g,'1').replace(/[Ss]/g,'5').replace(/[X*]/g,'x').replace(/\s+/g,' ').trim();}
 function validDim(n){return n>=150&&n<=3000}
-function dimensionFromText(t){
-  const s=norm(t).replace(/[^0-9x.\s]/g,' ');
-  let m=s.match(/(\d{2,4})\s*x\s*(\d{2,4})/i);
-  if(m){
-    const w=+m[1],h=+m[2];
-    if(validDim(w)&&validDim(h))return {w,h};
-  }
-  const nums=(s.match(/\d{2,4}/g)||[]).map(Number).filter(validDim);
-  for(let i=0;i<nums.length-1;i++)if(validDim(nums[i])&&validDim(nums[i+1]))return {w:nums[i],h:nums[i+1]};
-  return null;
-}
-function smallQty(t){
-  const nums=(norm(t).match(/\b\d{1,2}\b/g)||[]).map(Number).filter(n=>n>=1&&n<=20);
-  return nums.length?nums[nums.length-1]:null;
-}
-function boxInfo(poly){
-  if(!Array.isArray(poly)||!poly.length)return {cx:0,cy:0,h:40,x1:0,x2:0};
-  const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);
-  return {cx:(Math.min(...xs)+Math.max(...xs))/2,cy:(Math.min(...ys)+Math.max(...ys))/2,
-    h:Math.max(...ys)-Math.min(...ys),x1:Math.min(...xs),x2:Math.max(...xs)};
-}
-function parsePaddle(items){
-  const arr=(items||[]).map((it,i)=>({i,text:it.text||'',score:Number(it.score||0),box:boxInfo(it.poly)}))
-    .filter(x=>x.text&&x.score>=0.15);
-  const dims=[];
-  for(const a of arr){
-    const d=dimensionFromText(a.text);
-    if(d)dims.push({...d,box:a.box,text:a.text,score:a.score,inlineQty:smallQty(a.text)});
-  }
-  // Also combine adjacent OCR boxes on the same handwritten row.
-  const sorted=arr.slice().sort((a,b)=>a.box.cy-b.box.cy);
-  for(let i=0;i<sorted.length;i++){
-    for(let j=i+1;j<sorted.length;j++){
-      if(Math.abs(sorted[i].box.cy-sorted[j].box.cy)>Math.max(35,Math.min(sorted[i].box.h,sorted[j].box.h)*1.8))break;
-      const a=sorted[i],b=sorted[j];
-      const combo=dimensionFromText(a.text+' '+b.text);
-      if(combo)dims.push({...combo,box:{cx:(a.box.cx+b.box.cx)/2,cy:(a.box.cy+b.box.cy)/2,h:Math.max(a.box.h,b.box.h)},score:Math.min(a.score,b.score),inlineQty:null});
-    }
-  }
-  const out=[];
-  for(const d of dims){
-    let p=d.inlineQty||null;
-    if(!p){
-      const candidates=arr.filter(a=>a.i!==undefined && a.box.cy!==undefined && Math.abs(a.box.cy-d.box.cy)<=Math.max(45,d.box.h*1.8))
-        .map(a=>({a,q:smallQty(a.text)})).filter(x=>x.q!==null);
-      candidates.sort((u,v)=>{
-        const ur=(u.a.box.cx>=d.box.cx?0:1),vr=(v.a.box.cx>=d.box.cx?0:1);
-        return (ur-vr)||(Math.abs(u.a.box.cy-d.box.cy)-Math.abs(v.a.box.cy-d.box.cy));
-      });
-      if(candidates.length)p=candidates[0].q;
-    }
-    out.push({w:d.w,h:d.h,p:p||1,score:d.score});
-  }
-  const seen=new Set(),clean=[];
-  for(const x of out){
-    const k=x.w+'x'+x.h;
-    if(!seen.has(k)){seen.add(k);clean.push(x)}
-  }
-  return clean;
-}
-function preprocess(file,mode){
-  return new Promise((resolve,reject)=>{
-    const img=new Image();
-    img.onload=()=>{
-      const max=2400,scale=Math.min(1,max/img.width);
-      const c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);
-      const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,c.width,c.height);
-      const d=ctx.getImageData(0,0,c.width,c.height),a=d.data;
-      for(let i=0;i<a.length;i+=4){
-        const g=.299*a[i]+.587*a[i+1]+.114*a[i+2];
-        let v=g;
-        if(mode==='contrast')v=Math.max(0,Math.min(255,(g-128)*1.8+128));
-        if(mode==='threshold')v=g>150?255:0;
-        a[i]=a[i+1]=a[i+2]=v;
-      }
-      ctx.putImageData(d,0,0);c.toBlob(b=>b?resolve(b):reject(new Error('preprocess failed')),'image/png');
-    };
-    img.onerror=()=>reject(new Error('image load failed'));img.src=URL.createObjectURL(file);
-  });
-}
-async function getPaddle(){
-  if(!paddlePromise){
-    paddlePromise=import('https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/+esm')
-      .then(m=>m.PaddleOCR);
-  }
-  const PaddleOCR=await paddlePromise;
-  if(!paddleInstance){
-    paddleInstance=await PaddleOCR.create({
-      lang:'en',
-      ocrVersion:'PP-OCRv5',
-      worker:true,
-      ortOptions:{
-        backend:'wasm',
-        wasmPaths:'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/',
-        numThreads:1,
-        simd:true
-      }
-    });
-  }
-  return paddleInstance;
-}
-async function paddleScan(file,progress){
-  progress('PaddleOCR v5 চালু হচ্ছে...',12);
-  const ocr=await getPaddle();
-  progress('হাতে লেখা শনাক্ত করা হচ্ছে...',30);
-  const r1=(await ocr.predict(file))[0];
-  let found=parsePaddle(r1?.items||[]);
-  if(!found.length){
-    progress('ছবির contrast উন্নত করে আবার চেষ্টা...',55);
-    const c=await preprocess(file,'contrast');
-    const r2=(await ocr.predict(c))[0];
-    found=parsePaddle(r2?.items||[]);
-  }
-  progress('OCR ফলাফল সাজানো হচ্ছে...',90);
-  return {found,engine:'PaddleOCR PP-OCRv5'};
-}
-async function tesseractFallback(file,progress){
-  if(!window.Tesseract)throw new Error('Tesseract fallback unavailable');
-  progress('Fallback OCR চালু হচ্ছে...',35);
-  const w=await Tesseract.createWorker('eng',1,{logger:m=>{
-    if(m.status==='recognizing text')progress('Fallback OCR: '+Math.round((m.progress||0)*100)+'%',35+Math.round((m.progress||0)*45));
-  }});
-  await w.setParameters({tessedit_char_whitelist:'0123456789xX×*.,:() ',preserve_interword_spaces:'1'});
-  const r=await w.recognize(file);await w.terminate();
-  const text=r.data?.text||'';
-  const lines=text.split(/\n+/).map(norm).filter(Boolean),found=[];
-  for(const line of lines){
-    const d=dimensionFromText(line);if(d)found.push({w:d.w,h:d.h,p:smallQty(line)||1});
-  }
-  const seen=new Set(),clean=found.filter(x=>{const k=x.w+'x'+x.h;if(seen.has(k))return false;seen.add(k);return true});
-  return {found:clean,engine:'Tesseract fallback'};
-}
-window.runSmartOCR=async function(file,progress,allowFallback=true){
-  try{
-    const r=await paddleScan(file,progress);
-    if(r.found.length)return r;
-    if(!allowFallback)return r;
-    const f=await tesseractFallback(file,progress);
-    return f.found.length?f:{found:[],engine:'PaddleOCR + Tesseract'};
-  }catch(e){
-    if(!allowFallback)throw e;
-    try{return await tesseractFallback(file,progress)}catch(e2){throw new Error('OCR engines failed: '+e.message+' | '+e2.message)}
-  }
-};
+function dimensionFromText(t){const s=norm(t).replace(/[^0-9x.\s]/g,' ');let m=s.match(/(\d{2,4})\s*x\s*(\d{2,4})/i);if(m){const w=+m[1],h=+m[2];if(validDim(w)&&validDim(h))return{w,h}}const nums=(s.match(/\d{2,4}/g)||[]).map(Number).filter(validDim);for(let i=0;i<nums.length-1;i++)if(validDim(nums[i])&&validDim(nums[i+1]))return{w:nums[i],h:nums[i+1]};return null;}
+function smallQty(t){const nums=(norm(t).match(/\b\d{1,2}\b/g)||[]).map(Number).filter(n=>n>=1&&n<=20);return nums.length?nums[nums.length-1]:null;}
+function boxInfo(poly){if(!Array.isArray(poly)||!poly.length)return{cx:0,cy:0,h:40,x1:0,x2:0};const xs=poly.map(p=>p[0]),ys=poly.map(p=>p[1]);return{cx:(Math.min(...xs)+Math.max(...xs))/2,cy:(Math.min(...ys)+Math.max(...ys))/2,h:Math.max(...ys)-Math.min(...ys),x1:Math.min(...xs),x2:Math.max(...xs)};}
+function groupRows(arr){const rows=[];for(const item of arr.slice().sort((a,b)=>a.box.cy-b.box.cy)){let best=null,bd=1e9;for(const row of rows){const tol=Math.max(20,Math.min(48,item.box.h*.95,row.avgH*.95));const d=Math.abs(item.box.cy-row.cy);if(d<=tol&&d<bd){best=row;bd=d;}}if(!best)rows.push({items:[item],cy:item.box.cy,avgH:Math.max(10,item.box.h)});else{best.items.push(item);best.cy=best.items.reduce((s,x)=>s+x.box.cy,0)/best.items.length;best.avgH=best.items.reduce((s,x)=>s+Math.max(10,x.box.h),0)/best.items.length;}}return rows.sort((a,b)=>a.cy-b.cy);}
+function parsePaddle(items){const arr=(items||[]).map((it,i)=>({i,text:it.text||'',score:Number(it.score||0),box:boxInfo(it.poly)})).filter(x=>x.text&&x.score>=.08);const out=[];for(const row of groupRows(arr)){const cells=row.items.slice().sort((a,b)=>a.box.x1-b.box.x1);const combined=cells.map(x=>x.text).join(' ');let d=dimensionFromText(combined);if(!d)for(let i=0;i<cells.length&&!d;i++)for(let j=i+1;j<cells.length&&!d;j++)d=dimensionFromText(cells[i].text+' '+cells[j].text);if(!d)continue;const dimCell=cells.find(x=>dimensionFromText(x.text));let p=1;if(dimCell){const oq=cells.filter(x=>x!==dimCell).map(x=>smallQty(x.text)).filter(q=>q!==null);if(oq.length)p=oq[oq.length-1];}else{const qs=cells.map(x=>smallQty(x.text)).filter(q=>q!==null);if(qs.length)p=qs[qs.length-1];}out.push({w:d.w,h:d.h,p:p||1,score:Math.max(...cells.map(x=>x.score)),y:row.cy});}const clean=[];for(const x of out){if(!clean.some(y=>x.w===y.w&&x.h===y.h&&x.p===y.p&&Math.abs((x.y||0)-(y.y||0))<28))clean.push(x);}return clean.map(({w,h,p,score})=>({w,h,p,score}));}
+function preprocess(file,mode){return new Promise((resolve,reject)=>{const img=new Image();img.onload=()=>{const max=2800,scale=Math.min(1,max/img.width),c=document.createElement('canvas');c.width=Math.round(img.width*scale);c.height=Math.round(img.height*scale);const ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0,c.width,c.height);const d=ctx.getImageData(0,0,c.width,c.height),a=d.data;for(let i=0;i<a.length;i+=4){const g=.299*a[i]+.587*a[i+1]+.114*a[i+2];let v=g;if(mode==='contrast')v=Math.max(0,Math.min(255,(g-128)*1.9+128));if(mode==='soft')v=Math.max(0,Math.min(255,(g-115)*1.35+120));a[i]=a[i+1]=a[i+2]=v;}ctx.putImageData(d,0,0);c.toBlob(b=>b?resolve(b):reject(new Error('preprocess failed')),'image/png');};img.onerror=()=>reject(new Error('image load failed'));img.src=URL.createObjectURL(file);});}
+async function getPaddle(){if(!paddlePromise)paddlePromise=import('https://cdn.jsdelivr.net/npm/@paddleocr/paddleocr-js@0.4.2/+esm').then(m=>m.PaddleOCR);const PaddleOCR=await paddlePromise;if(!paddleInstance)paddleInstance=await PaddleOCR.create({textDetectionModelName:'PP-OCRv5_mobile_det',textRecognitionModelName:'en_PP-OCRv5_mobile_rec',worker:true,ortOptions:{backend:'wasm',wasmPaths:'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/',numThreads:1,simd:true}});return paddleInstance;}
+async function paddlePredict(ocr,source){return(await ocr.predict(source,{textDetLimitSideLen:3000,textDetLimitType:'max',textDetThresh:.18,textDetBoxThresh:.18,textDetUnclipRatio:1.8,textRecScoreThresh:.08}))[0];}
+async function paddleScan(file,progress,multi=true){progress('PaddleOCR handwriting engine চালু হচ্ছে...',10);const ocr=await getPaddle();const sources=[file];if(multi){progress('একাধিক OCR pass প্রস্তুত হচ্ছে...',22);sources.push(await preprocess(file,'contrast'));sources.push(await preprocess(file,'soft'));}let all=[];for(let i=0;i<sources.length;i++){progress('OCR pass '+(i+1)+'/'+sources.length+' চলছে...',25+i*20);const r=await paddlePredict(ocr,sources[i]);all.push(...parsePaddle(r?.items||[]));}const merged=[];for(const x of all){const same=merged.find(y=>y.w===x.w&&y.h===x.h&&y.p===x.p);if(!same)merged.push(x);}progress('OCR ফলাফল সাজানো হচ্ছে...',92);return{found:merged,engine:'PaddleOCR PP-OCRv5 handwriting'};}
+async function tesseractFallback(file,progress){if(!window.Tesseract)throw new Error('Tesseract fallback unavailable');progress('Fallback OCR চালু হচ্ছে...',35);const w=await Tesseract.createWorker('eng',1,{logger:m=>{if(m.status==='recognizing text')progress('Fallback OCR: '+Math.round((m.progress||0)*100)+'%',35+Math.round((m.progress||0)*45));}});await w.setParameters({tessedit_char_whitelist:'0123456789xX×*.,:() ',preserve_interword_spaces:'1',page_seg_mode:'6'});const r=await w.recognize(file);await w.terminate();const found=[];for(const line of(r.data?.text||'').split(/\n+/).map(norm).filter(Boolean)){const d=dimensionFromText(line);if(d)found.push({w:d.w,h:d.h,p:smallQty(line)||1});}return{found,engine:'Tesseract fallback'};}
+window.runSmartOCR=async function(file,progress,allowFallback=true,multi=true){try{const r=await paddleScan(file,progress,multi);if(r.found.length)return r;if(!allowFallback)return r;const f=await tesseractFallback(file,progress);return f.found.length?f:{found:[],engine:'PaddleOCR + Tesseract'};}catch(e){console.error('PaddleOCR failed',e);if(!allowFallback)throw e;try{return await tesseractFallback(file,progress)}catch(e2){throw new Error('OCR engines failed: '+e.message+' | '+e2.message)}}};
