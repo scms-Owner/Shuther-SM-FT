@@ -14,7 +14,7 @@ h1{font-size:21px;margin:0 0 4px}header p{margin:0;color:#d1d5db;font-size:13px}
 .card{background:var(--card);border-radius:16px;padding:16px;margin-bottom:14px;box-shadow:0 2px 12px #0000000d;border:1px solid var(--line)}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.btn{border:0;border-radius:12px;padding:13px 12px;font-weight:700;font-size:15px;cursor:pointer}.primary{background:var(--primary);color:#111827}.dark{background:var(--dark);color:#fff}.light{background:#eef2f7;color:#111827}.danger{background:#fee2e2;color:#991b1b}
 input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:contain;border-radius:12px;background:#111827;margin-top:12px;display:none}
-.status{font-size:13px;color:var(--muted);margin-top:10px;white-space:pre-wrap}.progress{height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:8px}.bar{height:100%;width:0;background:var(--primary);transition:.2s}
+.status{font-size:13px;color:var(--muted);margin-top:10px;white-space:pre-wrap}.scan-options{display:flex;flex-wrap:wrap;gap:12px;margin-top:12px;font-size:13px;color:#374151}.scan-options label{background:#f9fafb;border:1px solid var(--line);padding:8px 10px;border-radius:10px}.scan-options input{accent-color:#f59e0b}.progress{height:8px;background:#e5e7eb;border-radius:99px;overflow:hidden;margin-top:8px}.bar{height:100%;width:0;background:var(--primary);transition:.2s}
 .table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:650px}th,td{padding:9px 7px;border-bottom:1px solid var(--line);text-align:left;font-size:14px}th{background:#f9fafb;position:sticky;top:0}td input{width:100%;padding:8px;border:1px solid #d1d5db;border-radius:8px;font-size:14px}.num{text-align:right}.summary{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{padding:14px;border-radius:12px;background:#f9fafb;border:1px solid var(--line)}.metric small{display:block;color:var(--muted);font-size:12px}.metric strong{display:block;font-size:22px;margin-top:3px}.hint{font-size:13px;color:var(--muted);line-height:1.5}.footer{text-align:center;color:var(--muted);font-size:12px;padding:8px 0 25px}
 @media(max-width:600px){.actions{grid-template-columns:1fr}.wrap{padding:10px}.card{padding:12px;border-radius:13px}h1{font-size:19px}.summary{grid-template-columns:1fr 1fr}.metric strong{font-size:18px}}
 </style>
@@ -30,7 +30,11 @@ input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:co
 <input id="camera" type="file" accept="image/*" capture="environment">
 <input id="upload" type="file" accept="image/*">
 <img id="preview" class="preview" alt="স্ক্যান করা ছবি">
-<div id="status" class="status">ছবি দিন। OCR হাতে লেখা মাপ পড়ার চেষ্টা করবে। ফলাফল নিচের টেবিলে যাচাই/সংশোধন করতে পারবেন।</div>
+<div class="scan-options">
+<label><input id="enhanced" type="checkbox" checked> ✨ Handwriting Enhanced OCR</label>
+<label><input id="multi" type="checkbox" checked> 🔎 Multiple OCR passes</label>
+</div>
+<div id="status" class="status">ছবি দিন। এই সংস্করণটি আপনার দেওয়া হাতে-লেখা shutter dimension-এর জন্য বিশেষভাবে প্রস্তুত।</div>
 <div class="progress"><div id="bar" class="bar"></div></div>
 </section>
 
@@ -63,6 +67,7 @@ input[type=file]{display:none}.preview{width:100%;max-height:430px;object-fit:co
 <script>
 const rows=document.getElementById('rows'),statusEl=document.getElementById('status'),bar=document.getElementById('bar'),preview=document.getElementById('preview');
 let items=[];
+
 function render(){
  rows.innerHTML='';
  items.forEach((x,i)=>{
@@ -77,7 +82,10 @@ function render(){
  });
  updateTotal();
 }
-function area(x){const w=Number(x.w),h=Number(x.h),p=Number(x.p);return w>0&&h>0&&p>0?(w/1000)*(h/1000)*p:0}
+function area(x){
+ const w=Number(x.w),h=Number(x.h),p=Number(x.p);
+ return w>0&&h>0&&p>0?(w/1000)*(h/1000)*p:0;
+}
 function updateTotal(){
  const total=items.reduce((s,x)=>s+area(x),0);
  document.getElementById('m2').textContent=total.toFixed(4)+' m²';
@@ -86,46 +94,184 @@ function updateTotal(){
 document.getElementById('add').onclick=()=>{items.push({w:'',h:'',p:1});render()};
 document.getElementById('clear').onclick=()=>{items=[];render();statusEl.textContent='সব row মুছে ফেলা হয়েছে।'};
 rows.addEventListener('input',e=>{
- const i=e.target.dataset.i,k=e.target.dataset.k;if(i===undefined)return;
- items[+i][k]=e.target.value;render();
+ const i=e.target.dataset.i,k=e.target.dataset.k;
+ if(i===undefined)return;
+ items[+i][k]=e.target.value;
+ updateTotal();
+ const cell=e.target.closest('tr')?.querySelector('.num');
+ if(cell)cell.textContent=area(items[+i]).toFixed(4);
 });
 rows.addEventListener('click',e=>{
- const i=e.target.dataset.del;if(i!==undefined){items.splice(+i,1);render()}
+ const i=e.target.dataset.del;
+ if(i!==undefined){items.splice(+i,1);render()}
 });
-function parseText(text){
- const out=[];
- const lines=text.split(/\n+/).map(s=>s.trim()).filter(Boolean);
- for(const line of lines){
-  // Detect patterns such as 475x885, 475 X 885, 475×885 and a nearby integer pitch.
-  const m=line.match(/(\d{2,4})\s*[xX×*]\s*(\d{2,4})/);
-  if(!m)continue;
-  const nums=line.replace(m[0],' ').match(/\d+(?:\.\d+)?/g)||[];
-  let p=nums.length?Number(nums[nums.length-1]):1;
-  if(p<=0||p>100)p=1;
-  out.push({w:Number(m[1]),h:Number(m[2]),p});
+
+function bnToEn(s){
+ const bn='০১২৩৪৫৬৭৮৯', en='0123456789';
+ return String(s).replace(/[০-৯]/g,c=>en[bn.indexOf(c)]);
+}
+function normalizeOCR(s){
+ return bnToEn(s)
+  .replace(/[×✕✖·•]/g,'x')
+  .replace(/[‐‑‒–—]/g,'-')
+  .replace(/[Oo]/g,'0')
+  .replace(/[IiLl|]/g,'1')
+  .replace(/[Ss]/g,'5')
+  .replace(/\s+/g,' ')
+  .trim();
+}
+function validDim(n){return n>=150 && n<=3000}
+function cleanNum(n){return Number(String(n).replace(/[^0-9.]/g,''))}
+function dedupe(list){
+ const seen=new Set(),out=[];
+ for(const x of list){
+  const key=x.w+'x'+x.h+'x'+x.p;
+  if(!seen.has(key)){seen.add(key);out.push(x)}
  }
  return out;
 }
+
+/*
+  Parser tuned for the user's form:
+  - dimension is normally written as WIDTH x HEIGHT in the Name of Materials column
+  - pitch/quantity is in the right-hand Quantity column
+  - handwriting can turn x into spaces, *, X or ×
+  - OCR can confuse O/I/S with 0/1/5
+*/
+function parseMeasurementLines(text){
+ const lines=normalizeOCR(text).split(/\n+/).map(x=>x.trim()).filter(Boolean);
+ const found=[];
+ for(let raw of lines){
+  let line=raw.replace(/[^0-9xX*.,;:()\-\s]/g,' ');
+  line=line.replace(/[X*]/g,'x').replace(/\s+/g,' ').trim();
+
+  let m=line.match(/(\d{2,4})\s*x\s*(\d{2,4})/i);
+  let w,h,rest='';
+  if(m){
+    w=cleanNum(m[1]); h=cleanNum(m[2]); rest=line.slice(m.index+m[0].length);
+  }else{
+    // Handwritten "475 885" when the multiplication sign disappears.
+    const nums=(line.match(/\d{2,4}/g)||[]).map(cleanNum).filter(validDim);
+    if(nums.length>=2){
+      // Prefer adjacent plausible dimensions.
+      for(let j=0;j<nums.length-1;j++){
+        if(validDim(nums[j])&&validDim(nums[j+1])){
+          w=nums[j];h=nums[j+1];
+          const pos=line.indexOf(String(w));
+          rest=pos>=0?line.slice(pos+String(w).length):line;
+          break;
+        }
+      }
+    }
+  }
+  if(!w||!h||!validDim(w)||!validDim(h))continue;
+
+  // Quantity/pitch is usually 1-20. Prefer numbers appearing after the dimension.
+  const qnums=(rest.match(/\b\d{1,2}\b/g)||[]).map(Number).filter(n=>n>=1&&n<=20);
+  let p=qnums.length?qnums[qnums.length-1]:1;
+  found.push({w,h,p});
+ }
+ return dedupe(found);
+}
+
+function parseWholeText(text){
+ const lines=parseMeasurementLines(text);
+ // Second pass: dimensions sometimes appear in a single OCR paragraph.
+ if(lines.length)return lines;
+ const t=normalizeOCR(text);
+ const matches=[...t.matchAll(/(\d{2,4})\s*[xX*]\s*(\d{2,4})/g)];
+ return dedupe(matches.map(m=>({w:Number(m[1]),h:Number(m[2]),p:1})).filter(x=>validDim(x.w)&&validDim(x.h)));
+}
+
+function canvasPreprocess(file,mode){
+ return new Promise((resolve,reject)=>{
+  const img=new Image();
+  img.onload=()=>{
+   const max=2200, scale=Math.min(1,max/img.width);
+   const c=document.createElement('canvas');
+   c.width=Math.round(img.width*scale); c.height=Math.round(img.height*scale);
+   const ctx=c.getContext('2d',{willReadFrequently:true});
+   ctx.drawImage(img,0,0,c.width,c.height);
+   const d=ctx.getImageData(0,0,c.width,c.height), a=d.data;
+   for(let i=0;i<a.length;i+=4){
+    const g=0.299*a[i]+0.587*a[i+1]+0.114*a[i+2];
+    let v=g;
+    if(mode==='threshold') v=g>155?255:0;
+    if(mode==='contrast') v=Math.max(0,Math.min(255,(g-128)*1.65+128));
+    a[i]=a[i+1]=a[i+2]=v;
+   }
+   ctx.putImageData(d,0,0);
+   c.toBlob(b=>b?resolve(b):reject(new Error('Image preprocessing failed')),'image/png');
+  };
+  img.onerror=()=>reject(new Error('Image could not be loaded'));
+  img.src=URL.createObjectURL(file);
+ });
+}
+
+async function ocrOnce(source,label,worker){
+ const result=await worker.recognize(source);
+ return {text:result.data?.text||'',label};
+}
+
 async function scan(file){
  if(!file)return;
  preview.src=URL.createObjectURL(file);preview.style.display='block';
- statusEl.textContent='OCR চলছে... হাতে লেখা হলে ফলাফল অবশ্যই টেবিলে যাচাই করুন।';
- bar.style.width='5%';
+ bar.style.width='2%';
+ const enhanced=document.getElementById('enhanced').checked;
+ const multi=document.getElementById('multi').checked;
+ statusEl.textContent='ছবির লেখা প্রস্তুত করা হচ্ছে...';
+
  try{
-  const result=await Tesseract.recognize(file,'eng',{
-   logger:m=>{if(m.status==='recognizing text'){bar.style.width=Math.round((m.progress||0)*100)+'%';}}
+  const worker=await Tesseract.createWorker('eng',1,{
+   logger:m=>{
+    if(m.status==='recognizing text'){
+     bar.style.width=Math.max(8,Math.round((m.progress||0)*70))+'%';
+     statusEl.textContent='OCR চলছে: '+Math.round((m.progress||0)*100)+'%';
+    }
+   }
   });
-  const text=result.data.text||'';
-  const found=parseText(text);
+  await worker.setParameters({
+   tessedit_char_whitelist:'0123456789xX×*.,:() ',
+   preserve_interword_spaces:'1'
+  });
+
+  const sources=[{src:file,label:'Original'}];
+  if(enhanced){
+   sources.push({src:await canvasPreprocess(file,'contrast'),label:'Contrast'});
+   sources.push({src:await canvasPreprocess(file,'threshold'),label:'Threshold'});
+  }
+  const results=[];
+  const limit=multi?sources.length:1;
+  for(let i=0;i<limit;i++)results.push(await ocrOnce(sources[i].src,sources[i].label,worker));
+  await worker.terminate();
+
+  let candidates=[];
+  for(const r of results)candidates.push(...parseWholeText(r.text).map(x=>({...x,source:r.label})));
+
+  // Score repeated OCR agreement. Measurements seen by more than one pass get priority.
+  const groups=new Map();
+  for(const x of candidates){
+   const k=x.w+'x'+x.h;
+   if(!groups.has(k))groups.set(k,{w:x.w,h:x.h,p:x.p,count:0,sources:new Set()});
+   const g=groups.get(k);g.count++;g.sources.add(x.source);
+   // Quantity from OCR can vary; retain the first plausible one unless another pass agrees.
+   if(g.p===1&&x.p!==1)g.p=x.p;
+  }
+  const ordered=[...groups.values()].sort((a,b)=>(b.count-a.count)||(a.w-b.w));
+  const found=ordered.map(x=>({w:x.w,h:x.h,p:x.p,confidence:x.count>1?'Repeated OCR':'OCR'}));
+
   if(found.length){
-   items=found;render();
-   statusEl.textContent='OCR '+found.length+'টি measurement শনাক্ত করেছে। Dimension/Pitch যাচাই করে নিন।\n\nOCR text:\n'+text;
+   items=found.map(({w,h,p})=>({w,h,p}));
+   render();
+   statusEl.textContent='✅ '+found.length+'টি measurement শনাক্ত হয়েছে।\nRepeated OCR match থাকলে সেটি বেশি নির্ভরযোগ্য। সব Dimension/Pitch একবার যাচাই করুন।';
   }else{
-   statusEl.textContent='OCR থেকে Dimension×Dimension পাওয়া যায়নি। নিচের Add Row দিয়ে ম্যানুয়ালি দিন।\n\nOCR text:\n'+text;
+   statusEl.textContent='⚠️ Dimension শনাক্ত করা যায়নি। ছবিটি সোজা করে, আলো ভালো রেখে আবার Scan করুন। অথবা Add Row দিয়ে দিন।';
   }
   bar.style.width='100%';
  }catch(err){
-  console.error(err);statusEl.textContent='OCR error: '+err.message+'\nম্যানুয়ালি measurement যোগ করুন।';bar.style.width='0%';
+  console.error(err);
+  statusEl.textContent='OCR error: '+err.message+'\nছবিটি আবার চেষ্টা করুন অথবা ম্যানুয়ালি measurement যোগ করুন।';
+  bar.style.width='0%';
  }
 }
 document.getElementById('camera').onchange=e=>scan(e.target.files[0]);
